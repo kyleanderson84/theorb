@@ -90,7 +90,10 @@ class PasswordScreen(Screen):
         self.last = (0, 0)
         self.mode = 0  # 0 lower, 1 upper, 2 symbols
         Label(wri_s, 2, 2, "WiFi: " + ssid[:26], fgcolor=CYAN, bgcolor=BLACK)
-        self.lbl = Label(wri_s, 22, 2, "pw: _", fgcolor=YELLOW, bgcolor=BLACK)
+        # Fixed width (int) so long passwords are not clipped to the initial
+        # label width. ~34 chars at font10 width; enough for any WiFi key.
+        self.lbl = Label(wri_s, 22, 2, 300, fgcolor=YELLOW, bgcolor=BLACK)
+        self._render_pw()
         self.status = Label(wri_s, 40, 2, "", fgcolor=GREEN, bgcolor=BLACK)
 
         self.rows = 4
@@ -128,6 +131,14 @@ class PasswordScreen(Screen):
         self.mode = dd.value()
         self._populate()
 
+    def _render_pw(self):
+        # Mask all characters except the most recently typed one.
+        if self.pw:
+            masked = "*" * (len(self.pw) - 1) + self.pw[-1]
+        else:
+            masked = "_"
+        self.lbl.value("pw: " + masked)
+
     def _adjust(self, pad, ch, cw):
         g = self.grid
         crl, ccl = self.last
@@ -140,14 +151,14 @@ class PasswordScreen(Screen):
         char = lay[cr][cc] if cc < len(lay[cr]) else ""
         if char and char != " ":
             self.pw += char
-            self.lbl.value("pw: " + "*" * len(self.pw))
+            self._render_pw()
         g[cr, cc] = {"bgcolor": RED}
         self.last = (cr, cc)
 
     def _bsp(self, button):
         if self.pw:
             self.pw = self.pw[:-1]
-            self.lbl.value("pw: " + "*" * len(self.pw))
+            self._render_pw()
 
     def _connect(self, button):
         self.status.value("connecting...")

@@ -161,12 +161,30 @@ class SettingsScreen(Screen):
         # --- Power ---
         Button(wri, 138, 85, height=44, width=150, text="Power Off",
                fgcolor=WHITE, bgcolor=RED, textcolor=WHITE,
-               callback=self._power_off)
+               callback=self._confirm_power_off)
         CloseButton(wri)
 
     def _open_wifi(self, button):
         from wifi_screens import WiFiScreen
         Screen.change(WiFiScreen)
+
+    def _confirm_power_off(self, button):
+        # Ask before shutting down so a stray tap can't power off the device.
+        from gui.widgets import DialogBox
+        kwargs = {
+            "writer": wri,
+            "row": 60,
+            "col": 40,
+            "elements": (("Yes", RED), ("No", GREEN)),
+            "label": "Power off?",
+            "bgcolor": DARKBLUE,
+            "callback": self._power_off_result,
+        }
+        Screen.change(DialogBox, kwargs=kwargs)
+
+    def _power_off_result(self, window, *args):
+        if window.value() == "Yes":
+            self._power_off(None)
 
     def _power_off(self, button):
         try:

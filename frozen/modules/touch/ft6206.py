@@ -18,21 +18,42 @@ from .touch import ABCTouch
 
 
 class FT6206(ABCTouch):
-    def __init__(self, i2c, ssd, addr=0x38, thresh=128):
+    # Register map (shared by FT6206/FT6236/FT6336).
+    REG_DEVICE_MODE = 0x00
+    REG_THRESHOLD = 0x80
+    REG_TOUCHRATE_ACTIVE = 0x88
+    REG_PANEL_ID = 0xA8
+    REG_CHIP_ID = 0xA3
+
+    def __init__(self, i2c, ssd, addr=0x38, thresh=40):
         super().__init__(ssd, None)  # No preprocessor required
         self.i2c = i2c
         self.addr = addr
+        self.thresh = thresh
         self._fails = 0
         self._reset_cb = None  # set by touch_setup to recover a wedged chip
         buf = bytearray(1)
-        buf[0] = thresh
-        self.i2c.writeto_mem(addr, 0x80, buf)  # Set touch threshold
-        self.i2c.readfrom_mem_into(addr, 0xA8, buf)
+        self.i2c.readfrom_mem_into(addr, self.REG_PANEL_ID, buf)
         if ok := (buf[0] == 0x11):
-            self.i2c.readfrom_mem_into(addr, 0xA3, buf)
+            self.i2c.readfrom_mem_into(addr, self.REG_CHIP_ID, buf)
             ok = buf[0] in (0x06, 0x36, 0x64)
         if not ok:
             raise OSError("Invalid FT6206 chip type.")
+        self.configure()
+
+    def configure(self):
+        """Apply the FT6X36 init sequence proven by strange-v/FT6X36.
+        Threshold 128 (old default) is far too insensitive; 40 works well.
+        Forcing device mode 0 (active/polling) + a defined scan rate avoids the
+        intermittent lockup seen with sensor-mode defaults."""
+        i2c = self.i2c
+        a = self.addr
+        try:
+            i2c.writeto_mem(a, self.REG_DEVICE_MODE, b"\x00")       # active mode
+            i2c.writeto_mem(a, self.REG_THRESHOLD, bytes([self.thresh]))
+            i2c.writeto_mem(a, self.REG_TOUCHRATE_ACTIVE, b"\x0e")  # scan rate
+        except OSError:
+            pass
 
     def reset(self, rst_pin, delay_ms=10, settle_ms=300):
         """Hardware reset the touch controller and restore config.
@@ -43,10 +64,8 @@ class FT6206(ABCTouch):
         time.sleep_ms(delay_ms)
         rst_pin(1)
         time.sleep_ms(settle_ms)
-        try:
-            self.i2c.writeto_mem(self.addr, 0x80, bytearray(b"\x80"))
-        except OSError:
-            pass
+        # Restore the full config (mode/threshold/rate) after a reset.
+        self.configure()
         self._fails = 0
 
     def _value(self, offs, buf=bytearray(1)):

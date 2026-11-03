@@ -47,20 +47,29 @@ def _bl_pwm():
     return _bl
 
 
+def _bl_release():
+    """Release the PWM object and leave the pin as a plain output."""
+    global _bl
+    if _bl is not None:
+        try:
+            _bl.deinit()
+        except Exception:
+            pass
+        _bl = None
+
+
 def set_brightness(pct, save=True):
     """Set backlight brightness 0..100 (%)."""
     global _brightness
     pct = max(0, min(100, int(pct)))
     _brightness = pct
     if pct == 0:
-        # Fully off: hold pin low via plain output to avoid faint PWM glow.
-        try:
-            _bl_pwm().deinit()
-        except Exception:
-            pass
+        # Fully off: release PWM and hold the pin low (avoid faint glow).
+        _bl_release()
         Pin(BL_PIN, Pin.OUT, value=0)
     else:
-        # duty_u16: 0..65535. Keep a small floor so low % still lights.
+        # Re-acquire PWM if it was released (e.g. after power_off / 0%).
+        # duty_u16: 0..65535 with a small floor so low % still lights.
         duty = int(65535 * (0.15 + 0.85 * pct / 100))
         p = _bl_pwm()
         p.duty_u16(duty)
