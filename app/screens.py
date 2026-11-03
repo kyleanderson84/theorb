@@ -4,7 +4,7 @@
 
 from gui.core.tgui import Screen, ssd
 from gui.core.writer import CWriter
-from gui.widgets import CloseButton, Label, Button
+from gui.widgets import CloseButton, Label, Button, HorizSlider
 import gui.fonts.freesans20 as font
 import gui.fonts.font10 as small_font
 from gui.core.colors import (BLACK, GREEN, BLUE, WHITE, RED, YELLOW, CYAN,
@@ -104,6 +104,8 @@ class BaseScreen(Screen):
     def _on_app(self, button, target):
         if target == "agent":
             Screen.change(AgentScreen)
+        elif target == "Settings":
+            Screen.change(SettingsScreen)
         else:
             Screen.change(DetailScreen, args=(target,))
 
@@ -114,3 +116,61 @@ class DetailScreen(Screen):
         Label(wri, 60, 2, title, fgcolor=YELLOW, bgcolor=BLACK)
         Label(wri, 100, 2, "Not implemented yet", fgcolor=WHITE, bgcolor=BLACK)
         CloseButton(wri)
+
+
+class SettingsScreen(Screen):
+    """WiFi, brightness, and power-off."""
+
+    def __init__(self):
+        super().__init__()
+        Label(wri, 2, 2, "Settings", fgcolor=CYAN, bgcolor=BLACK)
+
+        try:
+            import power
+        except Exception:
+            power = None
+
+        # --- WiFi row (lowered ~14px to clear the CloseButton X) ---
+        Label(wri, 40, 2, "WiFi", fgcolor=WHITE, bgcolor=BLACK)
+        try:
+            import wifi
+            wtext = wifi.current_ssid() or "not connected"
+        except Exception:
+            wtext = "unavailable"
+        self.lbl_wifi = Label(wri_s, 40, 80, wtext[:26], fgcolor=GREEN,
+                              bgcolor=BLACK)
+        Button(wri, 36, 240, height=24, width=68, text="Setup",
+               fgcolor=WHITE, bgcolor=DARKBLUE, callback=self._open_wifi)
+
+        # --- Brightness ---
+        cur = power.get_brightness() if power else 100
+        Label(wri, 76, 2, "Brightness", fgcolor=WHITE, bgcolor=BLACK)
+        self.lbl_val = Label(wri_s, 76, 200, "%d%%" % cur, fgcolor=YELLOW,
+                             bgcolor=BLACK)
+
+        def on_slider(slider):
+            pct = int(round(slider.value() * 100))
+            self.lbl_val.value("%d%%" % pct)
+            if power:
+                power.set_brightness(pct)
+
+        HorizSlider(wri, 98, 20, width=280, divisions=10,
+                    fgcolor=GREEN, bgcolor=DARKBLUE, slotcolor=GREY,
+                    value=cur / 100, callback=on_slider)
+
+        # --- Power ---
+        Button(wri, 138, 85, height=44, width=150, text="Power Off",
+               fgcolor=WHITE, bgcolor=RED, textcolor=WHITE,
+               callback=self._power_off)
+        CloseButton(wri)
+
+    def _open_wifi(self, button):
+        from wifi_screens import WiFiScreen
+        Screen.change(WiFiScreen)
+
+    def _power_off(self, button):
+        try:
+            import power
+            power.power_off()
+        except Exception as e:
+            print("power off failed:", e)

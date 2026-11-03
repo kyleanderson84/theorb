@@ -315,7 +315,9 @@ class Screen:
         if arb is not None:
             spi = arb[0]
         while True:
-            await asyncio.sleep_ms(0)
+            # Poll at ~50Hz. Busy-polling (sleep_ms(0)) hammers the I2C bus and
+            # can wedge the FT6336 touch controller. 15ms is ample for touch.
+            await asyncio.sleep_ms(15)
             async with cls.rfsh_lock:  # Honour user lock.
                 cs = cls.current_screen
                 tl = cs.lstactive  # Active (touchable) widgets

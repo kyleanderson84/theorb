@@ -34,15 +34,15 @@ class FT6206(ABCTouch):
         if not ok:
             raise OSError("Invalid FT6206 chip type.")
 
-    def reset(self, rst_pin, delay_ms=30):
+    def reset(self, rst_pin, delay_ms=10, settle_ms=300):
         """Hardware reset the touch controller and restore config.
         On the ES3C28P the FT6336 locks up under I2C error storms; a reset
-        pulse + threshold rewrite brings it back. rst_pin is a configured Pin."""
+        pulse (LOW 10ms, HIGH 300ms — matches Bruce) brings it back."""
         rst_pin(0)
         import time
         time.sleep_ms(delay_ms)
         rst_pin(1)
-        time.sleep_ms(150)
+        time.sleep_ms(settle_ms)
         try:
             self.i2c.writeto_mem(self.addr, 0x80, bytearray(b"\x80"))
         except OSError:

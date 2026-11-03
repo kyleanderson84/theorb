@@ -37,7 +37,8 @@ pdc = Pin(_TFT_DC, Pin.OUT, value=0)
 prst = Pin(_TFT_DC, Pin.OUT, value=1)
 
 # Backlight: HIGH = on
-bl = Pin(_TFT_BL, Pin.OUT, value=1)
+# Backlight (GPIO45) is owned by power.py via PWM (brightness control).
+# Do not drive it as a plain output here.
 
 gc.collect()
 # 240x320 panel; usd=True (unscaled) — required when no scaled fonts are frozen.
@@ -86,3 +87,11 @@ if tpad is not None:
     display = Display(ssd, tpad)
 else:
     display = Display(ssd)
+
+# ---- Power: apply saved backlight brightness, register display for power-off ----
+try:
+    import power
+    power.init()
+    power.register_display(ssd)
+except Exception as e:
+    print("power init failed:", e)
