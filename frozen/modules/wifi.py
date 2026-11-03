@@ -125,6 +125,43 @@ def connect(ssid, pw="", timeout=12, save=True):
         return True, "connected"
 
 
+async def aconnect(ssid, pw="", timeout=12, save=True, on_status=None):
+    """Async connect that yields to the event loop (keeps the GUI responsive).
+    on_status(phase, detail) is called with 'start'/'ok'/'fail' as it progresses.
+    Returns (ok, message)."""
+    import asyncio
+    sta = _wlan()
+    sta.active(True)
+    try:
+        sta.disconnect()
+    except Exception:
+        pass
+    if on_status:
+        on_status("start", ssid)
+    try:
+        sta.connect(ssid, pw)
+    except Exception as e:
+        if on_status:
+            on_status("fail", "connect err")
+        return False, "connect err: %s" % e
+    t0 = time.time()
+    while not sta.isconnected():
+        if time.time() - t0 > timeout:
+            if on_status:
+                on_status("fail", "timeout")
+            return False, "timeout"
+        await asyncio.sleep_ms(200)
+    if save:
+        add_known(ssid, pw)
+    try:
+        ip = sta.ifconfig()[0]
+    except Exception:
+        ip = "connected"
+    if on_status:
+        on_status("ok", ip)
+    return True, ip
+
+
 def disconnect():
     try:
         _wlan().disconnect()

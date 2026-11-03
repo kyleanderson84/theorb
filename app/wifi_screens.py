@@ -161,10 +161,23 @@ class PasswordScreen(Screen):
             self._render_pw()
 
     def _connect(self, button):
+        # Run the (blocking) WiFi connect as a background GUI task so the
+        # display and touch keep responding and the status label redraws.
         self.status.value("connecting...")
+        self.reg_task(self._do_connect())
+
+    async def _do_connect(self):
         import wifi
-        ok, msg = wifi.connect(self.ssid, self.pw)
-        if ok:
-            self.status.value("connected: " + str(msg))
-        else:
-            self.status.value("failed: " + str(msg)[:20])
+
+        def on_status(phase, detail):
+            if phase == "start":
+                self.status.value("connecting %s..." % str(detail)[:16])
+            elif phase == "ok":
+                self.status.value("connected: " + str(detail)[:18])
+            else:
+                self.status.value("failed: " + str(detail)[:20])
+
+        try:
+            await wifi.aconnect(self.ssid, self.pw, on_status=on_status)
+        except Exception as e:
+            self.status.value("error: " + str(e)[:20])
