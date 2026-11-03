@@ -1,0 +1,12 @@
+# MicroPython upstream source tree is large and pinned externally.
+/micropython/
+# Python envs / caches
+.venv/
+__pycache__/
+*.pyc
+# Large binaries: firmware images, flash backups, logs
+backups/
+firmware/
+archive/*/firmware/
+*.log
+*.bin

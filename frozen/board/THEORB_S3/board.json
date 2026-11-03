@@ -1,0 +1,13 @@
+{
+    "deploy": ["../deploy.md"],
+    "deploy_options": {"flash_offset": "0"},
+    "docs": "",
+    "features": ["BLE", "External Flash", "External RAM", "WiFi"],
+    "images": [],
+    "mcu": "esp32s3",
+    "product": "The Orb ES3C28P",
+    "thumbnail": "",
+    "url": "",
+    "vendor": "The Orb",
+    "variants": {}
+}
