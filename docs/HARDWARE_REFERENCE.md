@@ -14,7 +14,7 @@ Source of truth: `docs/board_manuals/ES3C28P_pins_arduino.h` and `ES3C28P_interf
 |--------|------|
 | TFT_MOSI | 11 |
 | TFT_MISO | 13 |
-| TFT_SCK  | 14 (see note) |
+| TFT_SCK  | 12 |
 | TFT_CS   | 10 |
 | TFT_DC   | 46 |
 | TFT_RST  | -1 (tied to CHIP_PU / board reset) |
@@ -22,9 +22,9 @@ Source of truth: `docs/board_manuals/ES3C28P_pins_arduino.h` and `ES3C28P_interf
 
 - Resolution native: 240x320 (portrait). Used landscape 320x240.
 - `TFT_INVERSION_ON` — inversion must be enabled to fix colors.
-- NOTE: `pins_arduino.h` says `SPI_SCK_PIN 14` / `TFT_MOSI 11`, but your
-  working hacked driver used SCK=12, MOSI=11. **Verify SCK on the scope during
-  bring-up**; confirm which of 12/14 actually clocks the panel. MISO may be 13.
+- CONFIRMED working pins (from Bruce's TFT_eSPI User_Setup + verified on-hardware
+  color fill): SCK=12, MOSI=11, MISO=13, 40MHz. GPIO14 is the *expansion* SPI
+  bus (radio), NOT the TFT. Using SCK=14 produces a blank screen.
 
 ## Touch — FT6336G (I2C)
 | Signal | GPIO |
@@ -64,7 +64,10 @@ Source of truth: `docs/board_manuals/ES3C28P_pins_arduino.h` and `ES3C28P_interf
 - CLK = 38, CMD = 40, D0 = 39
 
 ## Misc
-- Battery ADC: GPIO 9 (x2 divider)
+- Battery ADC: GPIO 9 (ADC1 ch8), x2 divider. 2500mV=0%, 4200mV=100%.
+  Read via `battery.py` (uses read_uv() for calibrated mV).
+- No charge-status pin on this board (Bruce's isCharging() returns false).
+  Charging shown via voltage heuristic (>=4150mV) in battery.status_str().
 - BOOT button: GPIO 0 (active LOW)
 - USB: VID 0x303a PID 0x1001
 

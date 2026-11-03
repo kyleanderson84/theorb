@@ -70,17 +70,36 @@ class BaseScreen(Screen):
     def __init__(self):
         super().__init__()
         Label(wri, 2, 2, "THE ORB", fgcolor=CYAN, bgcolor=BLACK)
-        # Grid geometry: 2 cols x 3 rows below the title bar (y≈28px).
-        cw, ch = 150, 56          # cell width / height
-        x0, y0 = 6, 30
+        # Grid geometry: 2 cols x 3 rows below the title bar (y≈24px).
+        cw, ch = 150, 50          # cell width / height
+        x0, y0 = 6, 24
         for i, (label, target) in enumerate(self.APPS):
             r, c = divmod(i, 2)
             x = x0 + c * (cw + 8)
-            y = y0 + r * (ch + 8)
+            y = y0 + r * (ch + 6)
             Button(wri, y, x, height=ch, width=cw, text=label,
                    fgcolor=WHITE, bgcolor=DARKBLUE, textcolor=WHITE,
                    callback=self._on_app, args=(target,))
         CloseButton(wri)
+        # Bottom status bar: battery. font10 is 17px tall; place near y=218.
+        # Integer width (92px) so texts up to 'CHG 100%' (83px) never clip.
+        # Fixed-width via battery.fixed_status keeps redraws from leaving
+        # stale pixels; the integer width prevents truncation.
+        self.lbl_batt = Label(wri_s, 218, 2, 92, fgcolor=GREEN, bgcolor=BLACK)
+        self.reg_task(self._status_loop(), on_change=True)
+
+    async def _status_loop(self):
+        import asyncio
+        try:
+            import battery
+        except Exception:
+            battery = None
+        while True:
+            if battery:
+                self.lbl_batt.value(battery.fixed_status())
+            else:
+                self.lbl_batt.value("USB power   ")
+            await asyncio.sleep_ms(10000)
 
     def _on_app(self, button, target):
         if target == "agent":
