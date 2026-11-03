@@ -11,9 +11,11 @@ from machine import Pin, I2C, SPI
 from drivers.ili93xx.ili9341 import ILI9341 as SSD
 
 # ---- Display SPI bus ----
-# Board reference: TFT_MOSI=11, TFT_SCK=14 (verify on scope), CS=10, DC=46,
-# BL=45, RST=-1 (tied to CHIP_PU). MISO not needed for write-only panel.
-_TFT_SCK = 14
+# Authoritative pins from Bruce's working TFT_eSPI User_Setup (ES3C28P):
+#   TFT_MOSI=11  TFT_SCLK=12  TFT_MISO=13  CS=10  DC=46  BL=45  RST=-1
+#   SPI 40MHz, ILI9341, inversion ON.
+# NOTE: SCK is 12 (not 14). GPIO14 is the *expansion* SPI bus, not the TFT.
+_TFT_SCK = 12
 _TFT_MOSI = 11
 _TFT_CS = 10
 _TFT_DC = 46
@@ -21,7 +23,7 @@ _TFT_BL = 45
 
 spi = SPI(
     1,
-    baudrate=30_000_000,
+    baudrate=40_000_000,
     polarity=0,
     phase=0,
     sck=Pin(_TFT_SCK),
@@ -60,17 +62,23 @@ i2c = I2C(0, scl=Pin(15), sda=Pin(16), freq=400_000)
 try:
     tpad = FT6206(i2c, ssd)
     _touch_ok = True
+    # Let the driver recover a wedged FT6336 by pulsing RST + restoring config.
+    def _touch_reset():
+        tpad.reset(_tp_rst)
+    tpad._reset_cb = _touch_reset
 except Exception as e:
     print("touch init failed (display-only):", e)
     tpad = None
     _touch_ok = False
 
 if tpad is not None:
-    # Orientation: display used landscape (320x240). FT6206 raw coords are in
-    # portrait (240x320); transpose + reflect to match. Verify with touch.setup
-    # calibration, then lock values here.
-    # (xpix, ypix, xmin, ymin, xmax, ymax, trans, rr, rc)
-    tpad.init(ssd.height, ssd.width, 0, 0, 239, 319, True, True, False)
+    # Orientation mapping (measured from raw corner taps on this unit).
+    # Raw FT6336 coords are portrait 240x320 (x:0..240, y:0..320).
+    # Screen is landscape 320x240.  Desired: col = raw_y, row = 240 - raw_x.
+    # In precal mode poll() does: col=raw_x, row=raw_y, then rr/rc reflect,
+    # then transpose swaps. To achieve the above: rr=False, rc=True, trans=True.
+    #   xpix(=_xpix)=240, ypix(=_ypix)=320  (raw portrait dims)
+    tpad.init(240, 320, 0, 0, 239, 319, True, False, True)
 
 from gui.core.tgui import Display, quiet
 quiet()

@@ -22,6 +22,8 @@ class FT6206(ABCTouch):
         super().__init__(ssd, None)  # No preprocessor required
         self.i2c = i2c
         self.addr = addr
+        self._fails = 0
+        self._reset_cb = None  # set by touch_setup to recover a wedged chip
         buf = bytearray(1)
         buf[0] = thresh
         self.i2c.writeto_mem(addr, 0x80, buf)  # Set touch threshold
@@ -31,6 +33,21 @@ class FT6206(ABCTouch):
             ok = buf[0] in (0x06, 0x36, 0x64)
         if not ok:
             raise OSError("Invalid FT6206 chip type.")
+
+    def reset(self, rst_pin, delay_ms=30):
+        """Hardware reset the touch controller and restore config.
+        On the ES3C28P the FT6336 locks up under I2C error storms; a reset
+        pulse + threshold rewrite brings it back. rst_pin is a configured Pin."""
+        rst_pin(0)
+        import time
+        time.sleep_ms(delay_ms)
+        rst_pin(1)
+        time.sleep_ms(150)
+        try:
+            self.i2c.writeto_mem(self.addr, 0x80, bytearray(b"\x80"))
+        except OSError:
+            pass
+        self._fails = 0
 
     def _value(self, offs, buf=bytearray(1)):
         i2c.readfrom_mem_into(addr, offs, buf)  # b0..b3 = MSB
@@ -44,16 +61,25 @@ class FT6206(ABCTouch):
     def acquire(self, buf=bytearray(11)):
         addr = self.addr
         i2c = self.i2c
-        # This board's I2C occasionally NAKs during rapid polling. Retry a couple
-        # of times; on persistent failure report "not touched" so the GUI's
-        # touch-test task never dies. Touch is treated as optional.
+        # This board's I2C occasionally NAKs / the FT6336 locks up under error
+        # storms. Retry, and after sustained failure call the reset callback
+        # (if provided) to recover, then report "not touched" so the GUI's
+        # touch-test task never dies.
         for _ in range(3):
             try:
                 i2c.readfrom_mem_into(addr, 0x02, buf)
+                self._fails = 0
                 break
             except OSError:
                 continue
         else:
+            self._fails += 1
+            if self._fails >= 5 and self._reset_cb is not None:
+                self._fails = 0
+                try:
+                    self._reset_cb()
+                except Exception:
+                    pass
             return False
         t = buf[0]
         if t == 1:  # One touch

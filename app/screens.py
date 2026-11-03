@@ -4,10 +4,11 @@
 
 from gui.core.tgui import Screen, ssd
 from gui.core.writer import CWriter
-from gui.widgets import Menu, CloseButton, Label
+from gui.widgets import CloseButton, Label, Button
 import gui.fonts.freesans20 as font
 import gui.fonts.font10 as small_font
-from gui.core.colors import BLACK, GREEN, BLUE, WHITE, RED, YELLOW, CYAN
+from gui.core.colors import (BLACK, GREEN, BLUE, WHITE, RED, YELLOW, CYAN,
+                             DARKBLUE, GREY)
 
 wri = CWriter(ssd, font, GREEN, BLACK, verbose=False)
 wri_s = CWriter(ssd, small_font, WHITE, BLACK, verbose=False)
@@ -54,24 +55,38 @@ class AgentScreen(Screen):
 
 
 class BaseScreen(Screen):
+    """2-column grid launcher (Flipper-style). 320x240 landscape."""
+
+    # (label, callback-name) laid out row-major, 2 per row.
+    APPS = (
+        ("Agent", "agent"),
+        ("Radio", "Radio"),
+        ("Sub-GHz", "Sub-GHz"),
+        ("NFC", "NFC"),
+        ("IR", "IR"),
+        ("Settings", "Settings"),
+    )
+
     def __init__(self):
         super().__init__()
-        apps = (
-            ("Agent", self._open_agent, ()),
-            ("Radio", self._open_detail, ("Radio",)),
-            ("Sub-GHz", self._open_detail, ("Sub-GHz",)),
-            ("NFC", self._open_detail, ("NFC",)),
-            ("IR", self._open_detail, ("IR",)),
-            ("Settings", self._open_detail, ("Settings",)),
-        )
-        Menu(wri, bgcolor=BLUE, textcolor=WHITE, fgcolor=RED, args=(("Apps", apps),))
+        Label(wri, 2, 2, "THE ORB", fgcolor=CYAN, bgcolor=BLACK)
+        # Grid geometry: 2 cols x 3 rows below the title bar (y≈28px).
+        cw, ch = 150, 56          # cell width / height
+        x0, y0 = 6, 30
+        for i, (label, target) in enumerate(self.APPS):
+            r, c = divmod(i, 2)
+            x = x0 + c * (cw + 8)
+            y = y0 + r * (ch + 8)
+            Button(wri, y, x, height=ch, width=cw, text=label,
+                   fgcolor=WHITE, bgcolor=DARKBLUE, textcolor=WHITE,
+                   callback=self._on_app, args=(target,))
         CloseButton(wri)
 
-    def _open_agent(self, button):
-        Screen.change(AgentScreen)
-
-    def _open_detail(self, button, title):
-        Screen.change(DetailScreen, args=(title,))
+    def _on_app(self, button, target):
+        if target == "agent":
+            Screen.change(AgentScreen)
+        else:
+            Screen.change(DetailScreen, args=(target,))
 
 
 class DetailScreen(Screen):
