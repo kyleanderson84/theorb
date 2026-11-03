@@ -95,13 +95,15 @@ class PasswordScreen(Screen):
 
         self.rows = 4
         self.cols = 10
-        colwidth = 30
-        self.grid = Grid(wri, 60, 2, colwidth, self.rows, self.cols,
+        # Use the small font for compact keys that fit 10 cols in 320px.
+        # Grid width = cols*(lwidth+4)-4 = 10*(27+4)-4 = 306px.
+        colwidth = 27
+        self.grid = Grid(wri_s, 60, 7, colwidth, self.rows, self.cols,
                          justify=Label.CENTRE)
         self._populate()
         ch = round(self.grid.height / self.rows)
         cw = round(self.grid.width / self.cols)
-        self.pad = Pad(wri, 60, 2, height=self.grid.height,
+        self.pad = Pad(wri_s, 60, 7, height=self.grid.height,
                        width=self.grid.width, callback=self._adjust,
                        args=(ch, cw))
         brow = self.grid.mrow + 5
