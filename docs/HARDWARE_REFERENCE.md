@@ -71,8 +71,11 @@ Source of truth: `docs/board_manuals/ES3C28P_pins_arduino.h` and `ES3C28P_interf
   | GDO0 | 15 |
   | GDO2 | 16 |
   | VCC / GND | 3V3 / GND |
-- SPI mode 0; ~100 kHz works reliably on the jumper wires. The board-manual
-  mapping (SCK=14/MOSI=3/MISO=2) is WRONG for this module.
+- SPI mode 0. Use **1 MHz**: the raw-OOK RX FIFO fills at ~100 kBaud (12.5 kB/s)
+  and *must* be drained faster than it fills or it overflows (marcstate 0x11)
+  and the radio stalls. 100 kHz / 400 kHz cannot keep up; 1 MHz sustains
+  ~12.4 kB/s (verified). The board-manual mapping (SCK=14/MOSI=3/MISO=2) is
+  WRONG for this module.
 - GDO0 (15) and GDO2 (16) sit on the shared touch/audio I2C bus (SCL=15,
   SDA=16), so `IOCFG0/1/2` are set to `0x2E` (tri-state) to avoid contention.
   RX uses the FIFO, not GDO — carrier-sense GDO would conflict with I2C.

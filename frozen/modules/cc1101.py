@@ -143,8 +143,12 @@ class CC1101:
         if spi is not None:
             self.spi = spi
         else:
+            # 1 MHz: must drain the RX FIFO faster than the 100 kBaud OOK
+            # profile fills it, or the FIFO overflows (marcstate 0x11) and the
+            # radio stalls. Measured: 1 MHz sustains ~12.4 kB/s (no overflow);
+            # 400 kHz only ~5 kB/s (overflows). Verified on this hardware.
             self.spi = machine.SPI(
-                2, baudrate=100_000, polarity=0, phase=0,
+                2, baudrate=1_000_000, polarity=0, phase=0,
                 sck=machine.Pin(sck), mosi=machine.Pin(mosi),
                 miso=machine.Pin(miso),
             )
@@ -314,36 +318,60 @@ class CC1101:
                 time.sleep_ms(settle_ms)
         return out, best
 
-    def capture(self, duration_ms=2000, threshold_dbm=-90, max_bytes=256):
-        """RSSI-gated raw OOK capture at the current frequency.
+    def capture(self, duration_ms=3000, threshold_dbm=None, max_bytes=8192,
+                settle_ms=40, tail_ms=25):
+        """Wait for an OOK burst (RSSI rise) and capture just that burst.
 
-        Reads the RX FIFO only while the signal is above threshold (the OOK
-        slicer idles at 0xFF, so a burst is gated on RSSI). Returns
-        (bytes, peak_rssi_dbm).
+        IMPORTANT: in infinite-FIFO OOK mode the RX FIFO fills at the data rate
+        and overflows in ~5 ms unless read, which stalls the radio
+        (marcstate 0x11). So we drain the FIFO continuously from the instant RX
+        starts — discarding while idle, accumulating only during a burst. RSSI
+        gating keeps the buffer on the actual transmission rather than filling
+        it with ambient noise. Returns (bytes, peak_rssi_dbm).
         """
         self.rx()
-        buf = bytearray()
+        floor = 127
         peak = -999
-        above = False
+        t0 = time.ticks_ms()
+        while time.ticks_diff(time.ticks_ms(), t0) < settle_ms:
+            n = self.rx_bytes()
+            if n:
+                self.read_rx_fifo(n)             # discard cal/idle bytes
+            dbm = self.rssi_dbm()
+            if dbm < floor:
+                floor = dbm
+            if dbm > peak:
+                peak = dbm
+            time.sleep_ms(1)
+        thresh = threshold_dbm if threshold_dbm is not None else max(floor + 6, -90)
+
+        buf = bytearray()
+        hot = False
+        last_hot = None
         end = time.ticks_add(time.ticks_ms(), duration_ms)
         while time.ticks_diff(end, time.ticks_ms()) > 0:
+            n = self.rx_bytes()
+            if n:
+                chunk = self.read_rx_fifo(min(n, 64))
+                if hot:
+                    buf += chunk
             dbm = self.rssi_dbm()
             if dbm > peak:
                 peak = dbm
-            hot = dbm > threshold_dbm
-            if hot and not above:
-                n = self.rx_bytes()          # drop stale idle bytes
-                if n:
-                    self.read_rx_fifo(n)
-                above = True
-            if hot:
-                n = self.rx_bytes()
-                if n:
-                    buf += self.read_rx_fifo(n)
-                    if len(buf) >= max_bytes:
-                        break
-            elif above:
-                above = False
+            if not hot:
+                if dbm > thresh:
+                    hot = True
+                    last_hot = time.ticks_ms()
+                time.sleep_ms(1)
+                continue
+            if dbm >= thresh - 4:
+                last_hot = time.ticks_ms()
+            elif last_hot is not None and time.ticks_diff(
+                    time.ticks_ms(), last_hot) > tail_ms:
+                break
+            if len(buf) >= max_bytes:
+                break
+            time.sleep_ms(0)
         self.idle()
         return bytes(buf[:max_bytes]), peak
 

@@ -48,6 +48,38 @@ def rle(data):
     return runs
 
 
+def _denoise(runs, min_run=2):
+    """Merge runs shorter than `min_run` (slicer glitches) into neighbours.
+
+    At the stock ~100 kBaud OOK profile (~10 us/sample) real pulses are tens of
+    samples long, but a weak/noisy signal produces many 1-sample toggles. Left
+    alone those dominate the histogram and the unit estimate collapses to 1.
+    """
+    out = [[b, c] for b, c in runs]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(out)):
+            if out[i][1] < min_run:
+                if i > 0:
+                    out[i - 1][1] += out[i][1]
+                elif len(out) > 1:
+                    out[i + 1][1] += out[i][1]
+                else:
+                    break
+                del out[i]
+                merged = []
+                for b, c in out:
+                    if merged and merged[-1][0] == b:
+                        merged[-1][1] += c
+                    else:
+                        merged.append([b, c])
+                out = merged
+                changed = True
+                break
+    return out
+
+
 def _unit_samples(runs):
     """Estimate the base pulse unit (in samples).
 
@@ -86,6 +118,7 @@ def decode_tribit(runs, sym_us, max_bits=64):
     A frame is: sync (short high + long low) then N (high,low) pairs, where
     bit 0 = 1u high + 3u low and bit 1 = 3u high + 1u low.
     """
+    runs = _denoise(runs)
     n = len(runs)
     if n < 8:
         return None
@@ -140,13 +173,14 @@ def _hex(v, nibbles):
 def decode(data, sym_us=10.0):
     """Analyse a raw OOK capture. Returns a dict with pulses + a decode guess."""
     bits, edges = analyse(data)
-    runs = rle(data)
+    runs = _denoise(rle(data))
     unit_samples = _unit_samples(runs) if runs else 1
     out = {
         "bytes": len(data),
         "bits": bits,
         "edges": edges,
         "runs": len(runs),
+        "noise": unit_samples <= 1 and edges > 0,
         "unit_us": unit_samples * sym_us,
         "guess": None,
     }
@@ -182,7 +216,7 @@ def _path(name):
     return "%s/%s" % (DIR, name)
 
 
-def save_capture(data, freq, peak=None):
+def save_capture(data, freq, peak=None, sym_us=None):
     """Persist a raw capture. Returns the stored filename."""
     _ensure_dir()
     meta = {
@@ -190,6 +224,7 @@ def save_capture(data, freq, peak=None):
         "freq": freq,
         "peak": peak,
         "bytes": len(data),
+        "sym_us": sym_us,
         "ts": int(time.time()),
     }
     base = "subghz_%d_%d" % (int(freq * 100), int(time.ticks_ms()))

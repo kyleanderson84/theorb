@@ -94,7 +94,8 @@ def run(ctx):
             else:
                 ctx.log("no protocol match (%d edges)" % res["edges"])
             if res["edges"]:
-                name = subghz.save_capture(data, peak[1], cap_peak)
+                name = subghz.save_capture(data, peak[1], cap_peak,
+                                           radio.symbol_us())
                 ctx.state["cap_saved"] = name
                 ctx.log("saved %s" % name)
         except Exception as e:

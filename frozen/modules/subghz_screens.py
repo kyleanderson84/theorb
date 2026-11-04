@@ -125,23 +125,50 @@ class SubGhzScreen(Screen):
         self.dec.value("")
         radio.set_freq(freq)
         radio.rx()
-        n = radio.rx_bytes()                 # flush stale idle bytes
-        if n:
-            radio.read_rx_fifo(n)
+        # Drain continuously: infinite-FIFO OOK overflows in ~5 ms otherwise.
+        floor = 127
+        peak = -999
+        t0 = time.ticks_ms()
+        while time.ticks_diff(time.ticks_ms(), t0) < 40:   # cal + ambient floor
+            n = radio.rx_bytes()
+            if n:
+                radio.read_rx_fifo(n)         # discard cal/idle bytes
+            dbm = radio.rssi_dbm()
+            if dbm < floor:
+                floor = dbm
+            if dbm > peak:
+                peak = dbm
+            await asyncio.sleep_ms(1)
+        thresh = max(floor + 6, -90)
+        self.cap.value("listening... floor %d dBm" % floor)
 
         buf = bytearray()
-        peak = -999
+        hot = False
+        last_hot = None
         end = time.ticks_add(time.ticks_ms(), LISTEN_MS)
         while time.ticks_diff(end, time.ticks_ms()) > 0 and self._scanning:
-            await asyncio.sleep_ms(2)
+            n = radio.rx_bytes()
+            if n:
+                chunk = radio.read_rx_fifo(min(n, 64))
+                if hot:
+                    buf += chunk
+                    if len(buf) >= 8192:
+                        break
             dbm = radio.rssi_dbm()
             if dbm > peak:
                 peak = dbm
-            n = radio.rx_bytes()
-            if n:
-                buf += radio.read_rx_fifo(min(n, 64))
-            if len(buf) >= 4096:
-                break
+            if not hot:
+                if dbm > thresh:
+                    hot = True
+                    last_hot = time.ticks_ms()
+                await asyncio.sleep_ms(1)
+                continue
+            if dbm >= thresh - 4:
+                last_hot = time.ticks_ms()
+            elif last_hot is not None and time.ticks_diff(
+                    time.ticks_ms(), last_hot) > 25:
+                break                         # ~25 ms of quiet ends the burst
+            await asyncio.sleep_ms(0)          # drain hard while a burst is on
         radio.idle()
 
         self.status.value("scanning 315 / 433.92 / 868")
@@ -162,8 +189,10 @@ class SubGhzScreen(Screen):
         g = res["guess"]
         if g:
             self.dec.value("%s %s (%db)" % (g["protocol"], g["hex"], g["bits"]))
+        elif res.get("noise"):
+            self.dec.value("noisy/weak - try closer/nearer")
         else:
-            self.dec.value("no protocol match, unit~%dus %druns" %
+            self.dec.value("no match, unit~%dus %druns" %
                            (int(res["unit_us"]), res["runs"]))
         return res
 
@@ -177,7 +206,7 @@ class SubGhzScreen(Screen):
             return
         try:
             name = subghz.save_capture(self._last, self._last_freq,
-                                       self._last_peak)
+                                       self._last_peak, _sym_us())
             self.status.value("saved %s" % name)
         except Exception as e:
             self.status.value("save failed: %r" % e)
@@ -255,12 +284,16 @@ class CaptureScreen(Screen):
               (m.get("freq", 0), m.get("peak"), m.get("bytes", len(self.data))),
               fgcolor=WHITE, bgcolor=BLACK)
 
-        res = subghz.decode(self.data, _sym_us())
+        sym = self.meta.get("sym_us") or _sym_us()
+        res = subghz.decode(self.data, sym)
         g = res["guess"]
         if g:
             Label(wri_s, 40, 2, "%s  %s  %d bits" %
                   (g["protocol"], g["hex"], g["bits"]),
                   fgcolor=GREEN, bgcolor=BLACK)
+        elif res.get("noise"):
+            Label(wri_s, 40, 2, "noisy/weak signal (no clean pulses)",
+                  fgcolor=YELLOW, bgcolor=BLACK)
         else:
             Label(wri_s, 40, 2, "no protocol match (unit ~%d us)" %
                   int(res["unit_us"]), fgcolor=YELLOW, bgcolor=BLACK)
@@ -270,12 +303,12 @@ class CaptureScreen(Screen):
 
         Label(wri_s, 78, 2, "hex:", fgcolor=WHITE, bgcolor=BLACK)
         yy = 94
-        for i in range(0, min(96, len(self.data)), 16):
+        for i in range(0, min(80, len(self.data)), 16):
             chunk = self.data[i:i + 16]
             Label(wri_s, yy, 2, "%04x " % i +
-                  " ".join("%02x" % b for b in chunk),
-                  fgcolor=GREY, bgcolor=BLACK)
-            yy += 14
+                  " ".join(["%02x" % b for b in chunk]),
+                  fgcolor=WHITE, bgcolor=BLACK)
+            yy += 12
 
         self.del_btn = Button(wri_s, 194, 2, height=34, width=150,
                               text="Delete", fgcolor=WHITE, bgcolor=RED,
