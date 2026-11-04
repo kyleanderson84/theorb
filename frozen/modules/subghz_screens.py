@@ -126,63 +126,74 @@ class SubGhzScreen(Screen):
         radio.set_freq(freq)
         radio.rx()
         # Drain continuously: infinite-FIFO OOK overflows in ~5 ms otherwise.
-        floor = 127
-        peak = -999
         t0 = time.ticks_ms()
-        while time.ticks_diff(time.ticks_ms(), t0) < 40:   # cal + ambient floor
+        amb_sum = 0
+        amb_n = 0
+        peak = -999
+        while time.ticks_diff(time.ticks_ms(), t0) < 30:   # cal + ambient avg
             n = radio.rx_bytes()
             if n:
                 radio.read_rx_fifo(n)         # discard cal/idle bytes
             dbm = radio.rssi_dbm()
-            if dbm < floor:
-                floor = dbm
+            amb_sum += dbm
+            amb_n += 1
             if dbm > peak:
                 peak = dbm
             await asyncio.sleep_ms(1)
-        thresh = max(floor + 6, -90)
-        self.cap.value("listening... floor %d dBm" % floor)
+        amb = amb_sum // amb_n if amb_n else -90
+        thresh = max(amb + 3, -85)
+        self.cap.value("listening %.1fM floor %d - press now" % (freq, amb))
 
-        buf = bytearray()
-        hot = False
+        ring = bytearray()      # rolling pre-roll while idle
+        buf = None              # latched burst (pre-roll + live data)
         last_hot = None
+        upd = 0
         end = time.ticks_add(time.ticks_ms(), LISTEN_MS)
         while time.ticks_diff(end, time.ticks_ms()) > 0 and self._scanning:
             n = radio.rx_bytes()
             if n:
                 chunk = radio.read_rx_fifo(min(n, 64))
-                if hot:
+                if buf is None:
+                    ring += chunk
+                    if len(ring) > 400:
+                        del ring[:len(ring) - 400]
+                else:
                     buf += chunk
-                    if len(buf) >= 8192:
-                        break
             dbm = radio.rssi_dbm()
             if dbm > peak:
                 peak = dbm
-            if not hot:
+                if time.ticks_diff(time.ticks_ms(), upd) > 200:
+                    upd = time.ticks_ms()
+                    self.status.value("listening %.1fM peak %d" % (freq, peak))
+            if buf is None:
                 if dbm > thresh:
-                    hot = True
+                    buf = bytearray(ring)   # keep pre-roll context
                     last_hot = time.ticks_ms()
                 await asyncio.sleep_ms(1)
                 continue
-            if dbm >= thresh - 4:
+            if dbm >= thresh - 3:
                 last_hot = time.ticks_ms()
             elif last_hot is not None and time.ticks_diff(
                     time.ticks_ms(), last_hot) > 25:
                 break                         # ~25 ms of quiet ends the burst
+            if len(buf) >= 16384:
+                break
             await asyncio.sleep_ms(0)          # drain hard while a burst is on
         radio.idle()
 
         self.status.value("scanning 315 / 433.92 / 868")
-        data = bytes(buf)
-        if not data or subghz.analyse(data)[1] == 0:
-            self._last = None
-            self.cap.value("%.1fM: no burst (peak %d dBm)" % (freq, peak))
-            return
-
-        self._last = data
-        self._last_freq = freq
-        self._last_peak = peak
-        self.cap.value("%.1fM %dB peak %d dBm" % (freq, len(data), peak))
-        self._show_decode(data)
+        data = bytes(buf if buf is not None else ring)
+        if data:
+            self._last = data
+            self._last_freq = freq
+            self._last_peak = peak
+        if buf is None:
+            self.cap.value("%.1fM no burst (peak %d) - hold closer?" %
+                           (freq, peak))
+        else:
+            self.cap.value("%.1fM %dB peak %d dBm" % (freq, len(data), peak))
+        if data:
+            self._show_decode(data)
 
     def _show_decode(self, data):
         res = subghz.decode(data, _sym_us())
@@ -241,7 +252,8 @@ class SavedScreen(Screen):
             except ValueError:
                 pass
         self._rows = []
-        display.fill_rect(2, 24, 316, 210, BLACK)
+        # Clear below the title and the top-right Close button (y 4..34).
+        display.fill_rect(2, 38, 316, 196, BLACK)
 
         caps = subghz.list_captures()[-MAX_LIST:]
         if not caps:
@@ -250,17 +262,21 @@ class SavedScreen(Screen):
             self._rows.append(Label(wri_s, 80, 2,
                                     "capture on Sub-GHz, then Save",
                                     fgcolor=GREY, bgcolor=BLACK))
-            return
-        y = 28
-        for name, meta in reversed(caps):
-            txt = "%s  %dB  %dM  %s" % (
-                name[7:19], meta.get("bytes", 0), int(meta.get("freq", 0)),
-                meta.get("peak", "-"))
-            self._rows.append(Button(
-                wri_s, y, 2, height=30, width=300, text=txt,
-                fgcolor=WHITE, bgcolor=DARKBLUE, textcolor=WHITE,
-                callback=self._open, args=(name,)))
-            y += 34
+        else:
+            y = 44
+            for name, meta in reversed(caps):
+                txt = "%s  %dB  %dM  %s" % (
+                    name[7:19], meta.get("bytes", 0), int(meta.get("freq", 0)),
+                    meta.get("peak", "-"))
+                self._rows.append(Button(
+                    wri_s, y, 2, height=28, width=300, text=txt,
+                    fgcolor=WHITE, bgcolor=DARKBLUE, textcolor=WHITE,
+                    callback=self._open, args=(name,)))
+                y += 30
+        self._rows.append(Button(
+            wri_s, 200, 166, height=36, width=150, text="Back",
+            fgcolor=WHITE, bgcolor=DARKBLUE, textcolor=WHITE,
+            callback=lambda b: Screen.back()))
 
     def _open(self, button, name):
         Screen.change(CaptureScreen, args=(name,))
@@ -302,17 +318,22 @@ class CaptureScreen(Screen):
               fgcolor=WHITE, bgcolor=BLACK)
 
         Label(wri_s, 78, 2, "hex:", fgcolor=WHITE, bgcolor=BLACK)
-        yy = 94
-        for i in range(0, min(80, len(self.data)), 16):
-            chunk = self.data[i:i + 16]
+        yy = 92
+        # font10 is 9 px/char on a 320 px panel: 8 bytes + offset is ~252 px.
+        # 16 bytes/line (~468 px) is rejected as off-screen and leaves hex blank.
+        for i in range(0, min(64, len(self.data)), 8):
+            chunk = self.data[i:i + 8]
             Label(wri_s, yy, 2, "%04x " % i +
                   " ".join(["%02x" % b for b in chunk]),
                   fgcolor=WHITE, bgcolor=BLACK)
             yy += 12
 
-        self.del_btn = Button(wri_s, 194, 2, height=34, width=150,
+        self.del_btn = Button(wri_s, 200, 2, height=36, width=150,
                               text="Delete", fgcolor=WHITE, bgcolor=RED,
                               textcolor=WHITE, callback=self._on_delete)
+        Button(wri_s, 200, 166, height=36, width=150, text="Back",
+               fgcolor=WHITE, bgcolor=DARKBLUE, textcolor=WHITE,
+               callback=lambda b: Screen.back())
         CloseButton(wri)
 
     def _on_delete(self, button):

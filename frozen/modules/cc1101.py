@@ -318,61 +318,72 @@ class CC1101:
                 time.sleep_ms(settle_ms)
         return out, best
 
-    def capture(self, duration_ms=3000, threshold_dbm=None, max_bytes=8192,
-                settle_ms=40, tail_ms=25):
-        """Wait for an OOK burst (RSSI rise) and capture just that burst.
+    def capture(self, duration_ms=4000, threshold_dbm=None, max_bytes=16384,
+                settle_ms=30, tail_ms=25, preroll=400):
+        """Wait for an OOK burst (RSSI rise) and capture it.
 
         IMPORTANT: in infinite-FIFO OOK mode the RX FIFO fills at the data rate
         and overflows in ~5 ms unless read, which stalls the radio
         (marcstate 0x11). So we drain the FIFO continuously from the instant RX
-        starts — discarding while idle, accumulating only during a burst. RSSI
-        gating keeps the buffer on the actual transmission rather than filling
-        it with ambient noise. Returns (bytes, peak_rssi_dbm).
+        starts. While idle we keep only a small rolling pre-roll; when RSSI
+        rises past a threshold (ambient + 3 dB by default) we latch that
+        pre-roll and append the burst until it goes quiet. If no burst is seen
+        in the window we return the recent pre-roll instead of nothing (so the
+        caller can still inspect/save it). Returns (bytes, peak_rssi_dbm).
         """
         self.rx()
-        floor = 127
-        peak = -999
+        # Settle past STARTCAL and measure the *average* ambient level.
         t0 = time.ticks_ms()
+        amb_sum = 0
+        amb_n = 0
+        peak = -999
         while time.ticks_diff(time.ticks_ms(), t0) < settle_ms:
             n = self.rx_bytes()
             if n:
                 self.read_rx_fifo(n)             # discard cal/idle bytes
             dbm = self.rssi_dbm()
-            if dbm < floor:
-                floor = dbm
+            amb_sum += dbm
+            amb_n += 1
             if dbm > peak:
                 peak = dbm
             time.sleep_ms(1)
-        thresh = threshold_dbm if threshold_dbm is not None else max(floor + 6, -90)
+        amb = amb_sum // amb_n if amb_n else -90
+        thresh = threshold_dbm if threshold_dbm is not None else max(amb + 3, -85)
 
-        buf = bytearray()
-        hot = False
+        ring = bytearray()       # rolling pre-roll while idle
+        buf = None               # latched burst (pre-roll + live data)
         last_hot = None
         end = time.ticks_add(time.ticks_ms(), duration_ms)
         while time.ticks_diff(end, time.ticks_ms()) > 0:
             n = self.rx_bytes()
             if n:
                 chunk = self.read_rx_fifo(min(n, 64))
-                if hot:
+                if buf is None:
+                    ring += chunk
+                    if len(ring) > preroll:
+                        del ring[:len(ring) - preroll]
+                else:
                     buf += chunk
             dbm = self.rssi_dbm()
             if dbm > peak:
                 peak = dbm
-            if not hot:
+            if buf is None:
                 if dbm > thresh:
-                    hot = True
+                    buf = bytearray(ring)    # keep pre-roll context
                     last_hot = time.ticks_ms()
                 time.sleep_ms(1)
                 continue
-            if dbm >= thresh - 4:
+            if dbm >= thresh - 3:
                 last_hot = time.ticks_ms()
             elif last_hot is not None and time.ticks_diff(
                     time.ticks_ms(), last_hot) > tail_ms:
-                break
+                break                        # ~25 ms of quiet ends the burst
             if len(buf) >= max_bytes:
                 break
-            time.sleep_ms(0)
+            time.sleep_ms(0)                 # drain hard while a burst is on
         self.idle()
+        if buf is None:
+            return bytes(ring), peak         # no burst: hand back recent data
         return bytes(buf[:max_bytes]), peak
 
 
