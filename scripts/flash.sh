@@ -11,7 +11,11 @@ set -uo pipefail
 
 PORT="${1:-/dev/ttyACM0}"
 BUILD="${BUILD:-/home/kyle_dude/theorb/micropython/ports/esp32/build-THEORB_S3}"
-FW="${FW:-/home/kyle_dude/theorb/firmware/theorb-mpy-v1.29-s3-oct16mb.bin}"
+# The bootable application image is the IDF project's <project>.bin
+# (micropython.bin), NOT firmware.bin — the latter is a merged image that must
+# not be written at 0x10000. Flashing the wrong one yields a boot loop
+# ("Factory app partition is not bootable").
+FW="${FW:-$BUILD/micropython.bin}"
 
 cd "$BUILD"
 
@@ -30,7 +34,7 @@ attempt() {
 flash_stub() {
     esptool --chip esp32s3 -p "$PORT" -b 460800 \
         --before default-reset --after hard-reset \
-        write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB \
+        write-flash --flash-mode dio --flash-freq 40m --flash-size 16MB \
         0x0 bootloader/bootloader.bin \
         0x8000 partition_table/partition-table.bin \
         0x10000 "$FW"
@@ -38,7 +42,7 @@ flash_stub() {
 flash_nostub() {
     esptool --chip esp32s3 -p "$PORT" -b 115200 --no-stub \
         --before default-reset --after hard-reset \
-        write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB \
+        write-flash --flash-mode dio --flash-freq 40m --flash-size 16MB \
         0x0 bootloader/bootloader.bin \
         0x8000 partition_table/partition-table.bin \
         0x10000 "$FW"
@@ -46,7 +50,7 @@ flash_nostub() {
 flash_usbreset() {
     esptool --chip esp32s3 -p "$PORT" -b 9600 --no-stub \
         --before usb-reset --after hard-reset \
-        write-flash --flash-mode dio --flash-freq 80m --flash-size 16MB \
+        write-flash --flash-mode dio --flash-freq 40m --flash-size 16MB \
         0x0 bootloader/bootloader.bin \
         0x8000 partition_table/partition-table.bin \
         0x10000 "$FW"

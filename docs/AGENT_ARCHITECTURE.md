@@ -104,7 +104,14 @@ this loop — payload coroutines are awaited directly.
 
 ## Not yet built (roadmap)
 
-- Real CC1101 sampling in the payload (driver is still a stub).
+- Real CC1101 sampling in the payload: done — `frozen/modules/cc1101.py`
+  (driver) + `frozen/modules/subghz.py` (decode + capture store) +
+  `app/agent_payload.py`, which sweeps 315/433.92/868 MHz, reports the RSSI
+  peak, then grabs, decodes, and saves one raw OOK capture (see
+  `docs/HARDWARE_REFERENCE.md` for wiring and the EV1527/PT2262 decoder). The
+  on-device Sub-GHz screen also captures, decodes, and browses `/captures`.
+  Next: more protocols (PWM encodings, rolling codes) and optional RF replay
+  (blocked: OOK TX needs the I2C-shared GDO0).
 - SD-card mount (board uses SDIO; VFS currently in internal 13MB flash).
 - BLE/hotspot dual-radio decision (see planning doc §secondary NIC).
 - Backend: FastAPI ingest + LangGraph + RAG (separate repo).

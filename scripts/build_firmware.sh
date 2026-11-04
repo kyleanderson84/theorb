@@ -2,7 +2,7 @@
 # build_firmware.sh — Build stock MicroPython v1.29 for ES3C28P
 #   ESP32-S3 / 8MB Octal PSRAM / 16MB QSPI flash
 #
-# Output: micropython/ports/esp32/build-ESP32_GENERIC_S3-SPIRAM_OCT/firmware.bin
+# Output: micropython/ports/esp32/build-THEORB_S3/micropython.bin  (app @0x10000)
 #
 # Prereqs (already present on this machine):
 #   - ~/esp-idf @ v5.5.2
@@ -47,12 +47,13 @@ echo "==> Building $BOARD variant $VARIANT (8MB OCT PSRAM, 16MB flash)"
 make BOARD="$BOARD" -j"$(nproc)"
 
 BUILD_DIR="build-${BOARD}"
-echo "==> Done. Firmware:"
-ls -la "$MPY_DIR/ports/esp32/$BUILD_DIR/firmware.bin"
+echo "==> Done. App image (flash at 0x10000):"
+ls -la "$MPY_DIR/ports/esp32/$BUILD_DIR/micropython.bin"
 echo
-echo "Flash with:"
+echo "Flash with scripts/flash.sh (bootloader @0x0, partition-table @0x8000,"
+echo "micropython.bin @0x10000), or:"
 echo "  esptool --chip esp32s3 -p /dev/ttyACM0 --before default_reset --after hard_reset \\"
-echo "    write_flash --flash_mode dio --flash_size 16MB 0x0 \\"
+echo "    write_flash --flash_mode dio --flash_freq 40m --flash_size 16MB 0x0 \\"
 echo "    $MPY_DIR/ports/esp32/$BUILD_DIR/bootloader/bootloader.bin \\"
 echo "    $MPY_DIR/ports/esp32/$BUILD_DIR/partition_table/partition-table.bin \\"
-echo "    $MPY_DIR/ports/esp32/$BUILD_DIR/firmware.bin"
+echo "    $MPY_DIR/ports/esp32/$BUILD_DIR/micropython.bin"

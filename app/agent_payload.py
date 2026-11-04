@@ -33,15 +33,69 @@ def setup(ctx):
 
 
 def run(ctx):
-    # Example collection epoch: report a heartbeat while time remains.
-    # The real payload would sample the CC1101 driver via ctx.hw["cc1101"].
-    start = time.ticks_ms()
+    # Collection epoch: sweep the sub-GHz bands and record RSSI peaks.
+    radio = ctx.hw.get("cc1101") if ctx.hw else None
+    if radio is None:
+        try:
+            import cc1101
+            radio = cc1101.open_radio()
+            ctx.hw["cc1101"] = radio
+        except Exception as e:
+            ctx.log("cc1101 unavailable: %r" % e)
+            return
+
+    if not radio.present():
+        ctx.emit_status("no CC1101")
+        ctx.log("cc1101 not detected")
+        return
+
+    radio.config_ook(FREQ_MHZ)
+    ctx.emit_status("sub-GHz scan")
     samples = 0
+    peak = (-999, None)
     while ctx.time_left_ms() > 0 and samples < 20:
-        # Placeholder sampling tick - replace with radio reads.
+        best_dbm, best_f = -999, None
+        for f in SWEEP:
+            radio.set_freq(f)
+            radio.rx()
+            time.sleep_ms(40)
+            dbm = radio.rssi_dbm()
+            if dbm > best_dbm:
+                best_dbm, best_f = dbm, f
+            radio.idle()
         samples += 1
+        if best_dbm > peak[0]:
+            peak = (best_dbm, best_f)
         ctx.state["hits"] = ctx.state.get("hits", 0) + 1
-        time.sleep_ms(250)
         if samples % 5 == 0:
-            ctx.emit_status("scan %d/%d" % (samples, 20))
-    ctx.log("epoch done: %d samples, %d hits" % (samples, ctx.state["hits"]))
+            ctx.emit_status("scan %d/%d peak %d dBm" % (samples, 20, peak[0]))
+
+    ctx.state["peak_dbm"] = peak[0]
+    ctx.state["peak_freq"] = peak[1]
+    ctx.log("epoch done: %d sweeps, peak %s dBm @ %s MHz" %
+            (samples, peak[0], peak[1]))
+
+    # Grab one raw OOK capture on the strongest band, decode, and persist it.
+    if peak[1] is not None:
+        radio.set_freq(peak[1])
+        data, cap_peak = radio.capture(1500, threshold_dbm=-90)
+        ctx.state["cap_bytes"] = len(data)
+        ctx.state["cap_peak_dbm"] = cap_peak
+        ctx.log("capture @ %s MHz: %d bytes, peak %d dBm" %
+                (peak[1], len(data), cap_peak))
+        try:
+            import subghz
+            res = subghz.decode(data, radio.symbol_us() or 10.0)
+            g = res.get("guess")
+            if g:
+                ctx.state["cap_code"] = g["hex"]
+                ctx.log("decoded %s %s (%d bits)" %
+                        (g["protocol"], g["hex"], g["bits"]))
+            else:
+                ctx.log("no protocol match (%d edges)" % res["edges"])
+            if res["edges"]:
+                name = subghz.save_capture(data, peak[1], cap_peak)
+                ctx.state["cap_saved"] = name
+                ctx.log("saved %s" % name)
+        except Exception as e:
+            ctx.log("decode/save failed: %r" % e)

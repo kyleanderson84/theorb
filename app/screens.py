@@ -29,7 +29,13 @@ class AgentScreen(Screen):
 
         # Start the frozen supervisor as a background task bound to this screen.
         from agent import Supervisor
-        self._sup = Supervisor(gui_status=self._on_status, hw={})
+        hw = {}
+        try:
+            import cc1101
+            hw["cc1101"] = cc1101.open_radio()
+        except Exception:
+            pass
+        self._sup = Supervisor(gui_status=self._on_status, hw=hw)
         self.reg_task(self._sup.run())
         self.reg_task(self._ui_refresh(), on_change=True)
 
@@ -106,6 +112,12 @@ class BaseScreen(Screen):
             Screen.change(AgentScreen)
         elif target == "Settings":
             Screen.change(SettingsScreen)
+        elif target == "NFC":
+            from nfc_screens import NFCScreen
+            Screen.change(NFCScreen)
+        elif target in ("Sub-GHz", "Radio"):
+            from subghz_screens import SubGhzScreen
+            Screen.change(SubGhzScreen)
         else:
             Screen.change(DetailScreen, args=(target,))
 
