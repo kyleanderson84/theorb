@@ -11,7 +11,7 @@ dolittle = lambda *_: None
 
 
 class Button(Widget):
-    lit_time = 1000
+    lit_time = 180  # Duration of touch-flash (ms)
     long_press_time = 1000
 
     def __init__(
@@ -53,6 +53,10 @@ class Button(Widget):
         self.lp_callback = lp_callback
         self.lp_args = lp_args
         self.lp_task = None  # Long press not in progress
+        self._lit = False  # Touch-flash in progress
+        self._lit_bg = None  # Colors to restore after flash
+        self._lit_fg = None
+        self.lit_task = None
 
     def show(self):
         if self.screen is not Screen.current_screen:
@@ -87,26 +91,57 @@ class Button(Widget):
                         self.writer, xc, yc, self.text, self.textcolor, self.bgcolor
                     )
 
-    async def shownormal(self):  # Revert to normal color after a delay
+    async def shownormal(self):  # Revert to normal colors after a delay
         try:
             await asyncio.sleep_ms(Button.lit_time)
         except asyncio.CancelledError:  # Or prior to a screen change
             pass
-        self.bgcolor = self.def_bgcolor
-        self.draw = True  # Redisplay
+        self._unlight()
+
+    def _light(self):
+        # Flash the button on touch. If a litcolor is supplied use it,
+        # otherwise invert text/background for a clear blink.
+        if self._lit:
+            return
+        self._lit = True
+        self._lit_bg = self.bgcolor
+        self._lit_fg = self.textcolor
+        if self.litcolor is not None:
+            self.bgcolor = self.litcolor
+        else:
+            self.bgcolor = self._lit_fg
+            self.textcolor = self._lit_bg
+        self.draw = True
+        if self.lit_task is not None:
+            self.lit_task.cancel()
+        self.lit_task = asyncio.create_task(self.shownormal())
+        Screen.current_screen.reg_task(self.lit_task, True)  # Cancel on screen change
+
+    def _unlight(self):
+        if not self._lit:
+            return
+        self.bgcolor = self._lit_bg
+        self.textcolor = self._lit_fg
+        self._lit = False
+        self.draw = True
 
     def _touched(self, row, col):  # Process touch
-        if self.litcolor is not None and self.bgcolor != self.litcolor:
-            self.bgcolor = self.litcolor
-            self.draw = True
-            revert = asyncio.create_task(self.shownormal())
-            Screen.current_screen.reg_task(revert, True)  # Cancel on screen change
+        try:
+            if getattr(self, "text", "") == "Connect":
+                with open("/tap.log","a") as _f: _f.write("BTN press Connect\n")
+        except Exception: pass
+        if self.litcolor is None or self.bgcolor != self.litcolor:
+            self._light()
         if self.lp_callback is not None:
             self.lp_task = asyncio.create_task(self.longpress())
         if not self.onrelease:
             self.callback(self, *self.callback_args)  # Callback not a bound method so pass self
 
     def _untouched(self):
+        try:
+            if getattr(self, "text", "") == "Connect":
+                with open("/tap.log","a") as _f: _f.write("BTN release Connect\n")
+        except Exception: pass
         if self.lp_task is not None:
             self.lp_task.cancel()
             self.lp_task = None

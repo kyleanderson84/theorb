@@ -329,14 +329,27 @@ class Screen:
                     t = touch.poll()
                     spi.init(baudrate=arb[1])
                 if t:  # Display is touched.
+                    _r = touch.row; _c = touch.col
+                    _rx = getattr(touch, "_x", -1); _ry = getattr(touch, "_y", -1)
+                    _hitname = "NONE"
                     if cs.autoclose(trow := touch.row, tcol := touch.col):
+                        try:
+                            with open("/tap.log","a") as _f:
+                                _f.write("tap r%d c%d raw %d,%d AUTOCLOSE\n" % (_r,_c,_rx,_ry))
+                        except Exception: pass
                         continue  # Window has closed. Loop again with new Screen
+                    _hit=False
                     for obj in (a for a in tl if a.visible and not a.greyed_out()):
                         if obj._trytouch(trow, tcol):
-                            # Run user "on press" callback if touched
+                            _hitname = type(obj).__name__ + ":" + str(getattr(obj,"text",""))
+                            _hit=True
                             break  # No need to check other objects
                         if ids != id(Screen.current_screen):  # cb may have changed screen
                             break  # get new touchlist
+                    try:
+                        with open("/tap.log","a") as _f:
+                            _f.write("tap r%d c%d raw %d,%d hit %s\n" % (_r,_c,_rx,_ry,_hitname))
+                    except Exception: pass
                 else:
                     for obj in (a for a in tl if a.was_touched):
                         obj.was_touched = False  # Call _untouched once only

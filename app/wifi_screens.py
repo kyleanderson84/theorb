@@ -76,8 +76,35 @@ class WiFiScreen(Screen):
                 self.status.value("connecting %s..." % ssid[:16])
                 ok, msg = wifi.connect(ssid, "")
                 self.status.value(("OK " if ok else "FAIL ") + str(msg)[:18])
-            else:
-                Screen.change(PasswordScreen, args=(ssid,))
+                return
+            # Known network: try the saved password first; only ask for a new
+            # one if that connection fails.
+            if known:
+                saved = wifi.load_known().get(ssid, "")
+                if saved:
+                    self.status.value("connecting %s..." % ssid[:16])
+                    self.reg_task(self._try_saved(ssid, saved))
+                    return
+            Screen.change(PasswordScreen, args=(ssid,))
+
+    async def _try_saved(self, ssid, pw):
+        import wifi
+        try:
+            ok, msg = await wifi.aconnect(ssid, pw, save=False)
+        except Exception as e:
+            ok, msg = False, str(e)
+        if ok:
+            try:
+                self.status.value("OK " + str(msg)[:18])
+            except Exception:
+                pass
+            return
+        # Saved password failed: ask for a new one.
+        try:
+            self.status.value("saved pw failed, enter new")
+        except Exception:
+            pass
+        Screen.change(PasswordScreen, args=(ssid,))
 
 
 class PasswordScreen(Screen):
@@ -94,7 +121,8 @@ class PasswordScreen(Screen):
         # label width. ~34 chars at font10 width; enough for any WiFi key.
         self.lbl = Label(wri_s, 22, 2, 300, fgcolor=YELLOW, bgcolor=BLACK)
         self._render_pw()
-        self.status = Label(wri_s, 40, 2, "", fgcolor=GREEN, bgcolor=BLACK)
+        # Fixed integer width so later .value() calls are not clipped to zero.
+        self.status = Label(wri_s, 40, 2, 300, fgcolor=GREEN, bgcolor=BLACK)
 
         self.rows = 4
         self.cols = 10
@@ -160,24 +188,96 @@ class PasswordScreen(Screen):
             self.pw = self.pw[:-1]
             self._render_pw()
 
+    def _log(self, msg):
+        try:
+            with open("/tap.log", "a") as _f:
+                _f.write(msg + "\n")
+        except Exception:
+            pass
+
+    def _force_refresh(self):
+        # Push dirty widgets to the panel immediately so status text is
+        # visible even while the GUI auto_refresh loop is starved by a
+        # blocking sta.connect() call. Best-effort; never raise.
+        try:
+            Screen.show(False)
+            ssd.show()
+        except Exception as e:
+            self._log("force_refresh EXC: %s" % e)
+
     def _connect(self, button):
+        # Guard against repeated taps spawning duplicate connect tasks.
+        if getattr(self, "_busy", False):
+            self._log("CONNECT ignored: already busy")
+            return
+        self._busy = True
+        # First thing: give the user INSTANT visible feedback that the tap
+        # registered, before anything that could fail or block.
+        try:
+            button.bgcolor = RED
+            button.value("wait...")
+        except Exception:
+            pass
+        try:
+            self.status.value("button pressed!")
+        except Exception:
+            pass
+        self._force_refresh()
+        self._log("CALLBACK _connect fired ssid=%s pwlen=%d" %
+                  (self.ssid, len(self.pw)))
         # Run the (blocking) WiFi connect as a background GUI task so the
         # display and touch keep responding and the status label redraws.
-        self.status.value("connecting...")
-        self.reg_task(self._do_connect())
+        try:
+            self._log("CONNECT set status...")
+            self.status.value("connecting...")
+            self._log("CONNECT status set OK; scheduling task")
+            t = self.reg_task(self._do_connect())
+            self._log("CONNECT task scheduled: %r" % t)
+        except Exception as e:
+            self._log("CONNECT EXC: %s" % e)
 
     async def _do_connect(self):
-        import wifi
+        self._log("DO_CONNECT started")
+        try:
+            import wifi
+        except Exception as e:
+            self._log("DO_CONNECT import wifi EXC: %s" % e)
+            self.status.value("no wifi module")
+            return
+        self._log("wifi.aconnect exists: %r" % hasattr(wifi, "aconnect"))
 
         def on_status(phase, detail):
-            if phase == "start":
-                self.status.value("connecting %s..." % str(detail)[:16])
-            elif phase == "ok":
-                self.status.value("connected: " + str(detail)[:18])
-            else:
-                self.status.value("failed: " + str(detail)[:20])
+            self._log("on_status %s %s" % (phase, detail))
+            try:
+                if phase == "start":
+                    self.status.value("connecting %s..." % str(detail)[:16])
+                elif phase == "ok":
+                    self.status.value("connected: " + str(detail)[:18])
+                else:
+                    self.status.value("failed: " + str(detail)[:20])
+            except Exception as e:
+                self._log("on_status set EXC: %s" % e)
+            self._force_refresh()
 
         try:
-            await wifi.aconnect(self.ssid, self.pw, on_status=on_status)
+            ok, msg = await wifi.aconnect(self.ssid, self.pw, on_status=on_status)
+            self._log("aconnect returned ok=%r msg=%r" % (ok, msg))
+            try:
+                self.status.value(("OK " if ok else "FAIL ") + str(msg)[:18])
+            except Exception:
+                pass
+            self._force_refresh()
         except Exception as e:
-            self.status.value("error: " + str(e)[:20])
+            import sys
+            try:
+                sys.print_exception(e)
+            except Exception:
+                pass
+            self._log("aconnect EXC: %s" % e)
+            try:
+                self.status.value("error: " + str(e)[:20])
+            except Exception:
+                pass
+            self._force_refresh()
+        finally:
+            self._busy = False

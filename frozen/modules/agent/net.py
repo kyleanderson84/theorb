@@ -20,15 +20,27 @@ try:
 except ImportError:
     urequests = None
 
-KNOWN_NETS = "config/known_nets.json"
+def _known_path():
+    # Delegate to wifi.known_path() so the SD mount logic lives in one place
+    # (and keeps a single SDCard reference alive).
+    try:
+        import wifi
+        return wifi.known_path()
+    except Exception:
+        return "config/known_nets.json"
 
 
 def _load_known():
+    # Resolve lazily so the SD card is mounted/available by the time we read.
     try:
-        with open(KNOWN_NETS) as f:
+        with open(_known_path()) as f:
             return json.load(f)
     except Exception:
-        return {}
+        try:
+            with open("config/known_nets.json") as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
 
 class Net:

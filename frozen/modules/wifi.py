@@ -6,9 +6,16 @@
 import network
 import time
 import ujson
+import os
 
+# Internal-flash fallback location.
 KNOWN = "config/known_nets.json"
+# SD card storage (SDIO mode: CLK=38, CMD=40, D0=39) so passwords survive
+# a ROM flash. If no card is present we fall back to internal flash.
+SD_MOUNT = "/sd"
+SD_KNOWN = "/sd/known_nets.json"
 _sta = None
+_sd_ready = False
 
 
 def _wlan():
@@ -18,20 +25,147 @@ def _wlan():
     return _sta
 
 
-def load_known():
+_sd_obj = None  # MUST hold a reference or GC unmounts the card
+
+
+def _sd_mounted():
+    # os.listdir("/") yields names WITHOUT leading slash, e.g. "sd".
     try:
-        with open(KNOWN) as f:
+        return "sd" in os.listdir("/")
+    except Exception:
+        return False
+
+
+def _mount_sd():
+    """Mount the card (fresh SDCard object). Returns True on success."""
+    global _sd_obj
+    try:
+        import machine
+        sd = machine.SDCard(slot=1, sck=38, cmd=40, data=(39,))
+        try:
+            os.mount(sd, SD_MOUNT)
+        except Exception:
+            # Already mounted or mount failed; verify below.
+            pass
+        _sd_obj = sd  # keep it alive
+        return _sd_mounted()
+    except Exception:
+        return False
+
+
+def _commit_sd():
+    """Force FAT writes to the physical card: unmount, then remount.
+
+    Writes to the card only reach physical storage on unmount, so we
+    always unmount+remount after a write to make it survive a reboot.
+    """
+    global _sd_ready
+    try:
+        if _sd_mounted():
+            try:
+                os.umount(SD_MOUNT)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    _sd_ready = False
+    return _mount_sd()
+
+
+def _ensure_sd():
+    """Mount the SD card once if present. Returns True if /sd is usable."""
+    global _sd_ready
+    if _sd_mounted():
+        _sd_ready = True
+        return True
+    if _mount_sd():
+        _sd_ready = True
+        return True
+    _sd_ready = False
+    return False
+
+
+def known_path():
+    """Return the active known-nets file path (SD preferred)."""
+    if _ensure_sd():
+        try:
+            # Confirm we can actually write to the card.
+            with open(SD_KNOWN, "a") as f:
+                pass
+            return SD_KNOWN
+        except Exception:
+            pass
+    return KNOWN
+
+
+def _migrate_if_needed():
+    """On first SD use, copy internal-flash creds to the card so nothing is lost."""
+    if not _ensure_sd():
+        return
+    try:
+        if "known_nets.json" not in os.listdir(SD_MOUNT):
+            try:
+                with open(KNOWN) as f:
+                    d = ujson.load(f)
+                if d:
+                    with open(SD_KNOWN, "w") as f:
+                        ujson.dump(d, f)
+                    _commit_sd()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def load_known():
+    _migrate_if_needed()
+    path = known_path()
+    try:
+        with open(path) as f:
             return ujson.load(f)
     except Exception:
+        # If SD path failed, try internal fallback.
+        if path != KNOWN:
+            try:
+                with open(KNOWN) as f:
+                    return ujson.load(f)
+            except Exception:
+                pass
         return {}
 
 
-def save_known(d):
+def _sync_write(path, d):
+    """Write JSON, commit to physical storage, and verify."""
     try:
-        with open(KNOWN, "w") as f:
+        with open(path, "w") as f:
             ujson.dump(d, f)
+            try:
+                f.flush()
+            except Exception:
+                pass
+        try:
+            os.sync()
+        except Exception:
+            pass
+        return True
     except Exception:
-        pass
+        return False
+
+
+def save_known(d):
+    path = known_path()
+    if _sync_write(path, d):
+        # Commit FAT to the card so it survives a reboot.
+        _commit_sd()
+        # Verify it actually landed after the remount.
+        try:
+            with open(path) as f:
+                if ujson.load(f) == d:
+                    return
+        except Exception:
+            pass
+    # Fallback to internal flash if SD write failed.
+    _sync_write(KNOWN, d)
 
 
 def add_known(ssid, pw):
